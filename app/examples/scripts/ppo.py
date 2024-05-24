@@ -36,7 +36,7 @@ tqdm.pandas()
 @dataclass
 class ScriptArguments:
     use_seq2seq: bool = field(default=False, metadata={"help": "whether to use seq2seq"})
-    trust_remote_code: bool = field(default=False, metadata={"help": "Enable `trust_remote_code`"})
+    trust_remote_code: bool = field(default=True, metadata={"help": "Enable `trust_remote_code`"})
 
     # LoraConfig
     use_peft: bool = field(default=False, metadata={"help": "whether to use peft"})
