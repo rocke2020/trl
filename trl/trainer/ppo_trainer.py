@@ -35,6 +35,8 @@ from transformers import (
     PreTrainedTokenizer,
     PreTrainedTokenizerBase,
     PreTrainedTokenizerFast,
+    is_torch_npu_available,
+    is_torch_xpu_available,
 )
 
 from ..core import (
@@ -52,7 +54,7 @@ from ..core import (
     stack_dicts,
     stats_to_np,
 )
-from ..import_utils import is_npu_available, is_torch_greater_2_0, is_xpu_available
+from ..import_utils import is_torch_greater_2_0
 from ..models import (
     SUPPORTED_ARCHITECTURES,
     PreTrainedModelWrapper,
@@ -67,6 +69,7 @@ if is_deepspeed_available():
 
 MODEL_CARD_TEMPLATE = """---
 license: apache-2.0
+library_name: transformers
 tags:
 - trl
 - ppo
@@ -156,6 +159,7 @@ class PPOTrainer(BaseTrainer):
         data_collator: Optional[typing.Callable] = None,
         num_shared_layers: Optional[int] = None,
         lr_scheduler: Optional[torch.optim.lr_scheduler._LRScheduler] = None,
+        training_data_collator: Optional[typing.Callable] = None,
     ):
         """
         Initialize PPOTrainer.
@@ -173,16 +177,23 @@ class PPOTrainer(BaseTrainer):
                 PyTorch dataset or Hugging Face dataset. If a Hugging Face dataset is passed, the dataset
                 will be preprocessed by removing the columns that are not used by the model. If none is passed,
                 a warning will be raised in a multi-GPU setting.
-            optimizer (Optional[`torch.optim.Optimizer`]):
+            optimizer (`Optional[torch.optim.Optimizer]`):
                 Optimizer used for training. If `None`, the `Adam` is used as default.
             data_collator (Optional[function]):
-                Data collator function.
+                Data collator function that is going to be used for `prepare_dataloader` method. Note this collator
+                is different from the one we use for training. Pass a valid `training_data_collator` instead.
             num_shared_layers (Optional[int]):
                 Number of shared layers between the model and the reference model. If `None`, all layers are shared.
                 used only if `ref_model` is `None`.
-            lr_scheduler (Optional[`torch.optim.lr_scheduler`]):
+            lr_scheduler (`Optional[torch.optim.lr_scheduler]`):
                 Learning rate scheduler used for training.
+            training_data_collator (Optional[function]):
+                Custom data collator used for training.
         """
+        warnings.warn(
+            "`PPOTrainer` is deprecated and will be removed in trl v0.12. Please use `PPOv2Trainer` instead.",
+            FutureWarning,
+        )
         super().__init__(config)
 
         # initial seed for reproducible experiments
@@ -280,7 +291,10 @@ class PPOTrainer(BaseTrainer):
             self.dataloader = None
 
         # Step 3: Initialize optimizer and data collator
-        self.data_collator = DataCollatorForLanguageModeling(self.tokenizer, mlm=False)
+        if training_data_collator is None:
+            self.data_collator = DataCollatorForLanguageModeling(self.tokenizer, mlm=False)
+        else:
+            self.data_collator = training_data_collator
         if optimizer is None:
             self.optimizer = Adam(
                 filter(lambda p: p.requires_grad, self.model.parameters()),
@@ -311,6 +325,18 @@ class PPOTrainer(BaseTrainer):
         is_deepspeed_used = self.accelerator.distributed_type == "DEEPSPEED" and hasattr(
             self.accelerator.state, "deepspeed_plugin"
         )
+
+        if config.gradient_checkpointing:
+            self.model.gradient_checkpointing_enable()
+
+            if hasattr(self.model, "enable_input_require_grads"):
+                self.model.enable_input_require_grads()
+            else:
+                # For backward compatibility with older versions of transformers
+                def make_inputs_require_grad(module, input, output):
+                    output.requires_grad_(True)
+
+                self.model.pretrained_model.get_input_embeddings().register_forward_hook(make_inputs_require_grad)
 
         (
             self.model,
@@ -355,9 +381,9 @@ class PPOTrainer(BaseTrainer):
         if not getattr(self.model, "is_sequential_parallel", False):
             self.current_device = self.accelerator.device
         else:
-            if is_xpu_available():
+            if is_torch_xpu_available():
                 self.current_device = torch.device("xpu:0")
-            elif is_npu_available():
+            elif is_torch_npu_available():
                 self.current_device = torch.device("npu:0")
             else:
                 self.current_device = torch.device("cuda:0")
@@ -595,7 +621,8 @@ class PPOTrainer(BaseTrainer):
             scores (List[`torch.FloatTensor`]):
                 List of tensors containing the scores.
             masks (List[`torch.LongTensor`], *optional*):
-                list of optional tensors containing the masks of shape (`query_length` + `response_length`)
+                list of optional tensors containing the masks of shape (`response_length`)
+
         Returns:
             `tuple`: The input processed data.
         """
@@ -968,6 +995,7 @@ class PPOTrainer(BaseTrainer):
                 List of tensors containing the encoded responses, shape (`batch_size`, `response_length`)
             return_logits (`bool`, *optional*, defaults to `False`):
                 Whether to return all_logits. Set to `False` if logits are not needed to reduce memory consumption.
+
         Returns:
             (tuple):
                 - all_logprobs (`torch.FloatTensor`): Log probabilities of the responses,
@@ -1014,15 +1042,11 @@ class PPOTrainer(BaseTrainer):
                     if attention_mask[j, 0] == 0:  # offset left padding
                         start += attention_mask[j, :].nonzero()[0]
                     end = start + len(response_batch[j])
-                    if response_masks is not None:
-                        response_masks_batch[j] = torch.cat(
-                            (torch.zeros_like(query_batch[j]), response_masks_batch[j])
-                        )[1:]
 
                 masks[j, :start] = 0
                 masks[j, end:] = 0
                 if response_masks is not None:
-                    masks[j, start:end] = masks[j, start:end] * response_masks_batch[j][start:end]
+                    masks[j, start:end] = masks[j, start:end] * response_masks_batch[j]
 
             if return_logits:
                 all_logits.append(logits)

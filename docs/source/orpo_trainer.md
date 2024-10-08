@@ -1,6 +1,8 @@
 # ORPO Trainer
 
-[Odds Ratio Preference Optimization](https://arxiv.org/abs/2403.07691) (ORPO) by Jiwoo Hong, Noah Lee, and James Thorne studies the crucial role of SFT within the context of preference alignment. Using preference data the method posits that a minor penalty for the disfavored generation together with a strong adaption signal to the chosen response via a simple log odds ratio term appended to the NLL loss is sufficient for preference-aligned SFT.
+[![](https://img.shields.io/badge/All_models-ORPO-blue)](https://huggingface.co/models?other=orpo,trl)
+
+[Odds Ratio Preference Optimization](https://huggingface.co/papers/2403.07691) (ORPO) by Jiwoo Hong, Noah Lee, and James Thorne studies the crucial role of SFT within the context of preference alignment. Using preference data the method posits that a minor penalty for the disfavored generation together with a strong adaption signal to the chosen response via a simple log odds ratio term appended to the NLL loss is sufficient for preference-aligned SFT.
 
 Thus ORPO is a reference model-free preference optimization algorithm eliminating the necessity for an additional preference alignment phase thus saving compute and memory.
 
@@ -56,15 +58,15 @@ The ORPO trainer expects a model of `AutoModelForCausalLM`, compared to PPO that
 For a detailed example have a look at the `examples/scripts/orpo.py` script. At a high level we need to initialize the `ORPOTrainer` with a `model` we wish to train. **Note that ORPOTrainer eliminates the need to use the reference model, simplifying the optimization process.** The `beta` refers to the hyperparameter `lambda` in eq. (6) of the paper and refers to the weighting of the relative odd ratio loss in the standard cross-entropy loss used for SFT.
 
 ```py
-orpo_config = ORPOConfig(
+training_args = ORPOConfig(
     beta=0.1, # the lambda/alpha hyperparameter in the paper/code
 )
 
 orpo_trainer = ORPOTrainer(
     model,
-    args=orpo_config,
+    args=training_args,
     train_dataset=train_dataset,
-    tokenizer=tokenizer,
+    processing_class=tokenizer,
 )
 ```
 After this one can then call:
@@ -72,6 +74,14 @@ After this one can then call:
 ```py
 orpo_trainer.train()
 ```
+
+### For Mixture of Experts Models: Enabling the auxiliary loss
+
+MOEs are the most efficient if the load is about equally distributed between experts.  
+To ensure that we train MOEs similarly during preference-tuning, it is beneficial to add the auxiliary loss from the load balancer to the final loss.  
+
+This option is enabled by setting `output_router_logits=True` in the model config (e.g. MixtralConfig).  
+To scale how much the auxiliary loss contributes to the total loss, use the hyperparameter `router_aux_loss_coef=...` (default: 0.001).
 
 ## Logging
 

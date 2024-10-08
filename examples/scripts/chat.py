@@ -1,4 +1,3 @@
-# flake8: noqa
 # Copyright 2024 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -14,15 +13,12 @@
 # limitations under the License.
 
 
-from trl.commands.cli_utils import init_zero_verbose
-
-init_zero_verbose()
-
 import copy
 import json
 import os
 import pwd
 import re
+import sys
 import time
 from threading import Thread
 
@@ -32,9 +28,12 @@ from rich.live import Live
 from rich.markdown import Markdown
 from transformers import AutoModelForCausalLM, AutoTokenizer, TextIteratorStreamer
 
-from trl.commands.cli_utils import ChatArguments, TrlParser, init_zero_verbose
+from trl import TrlParser, init_zero_verbose
+from trl.commands.cli_utils import ChatArguments
 from trl.trainer.utils import get_quantization_config
 
+
+init_zero_verbose()
 
 HELP_STRING = """\
 
@@ -211,19 +210,24 @@ def parse_settings(user_input, current_args, interface):
 
 
 def load_model_and_tokenizer(args):
-    tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path, revision=args.model_revision)
+    tokenizer = AutoTokenizer.from_pretrained(
+        args.model_name_or_path,
+        revision=args.model_revision,
+        trust_remote_code=args.trust_remote_code,
+    )
 
     torch_dtype = args.torch_dtype if args.torch_dtype in ["auto", None] else getattr(torch, args.torch_dtype)
     quantization_config = get_quantization_config(args)
     model_kwargs = dict(
         revision=args.model_revision,
-        trust_remote_code=args.trust_remote_code,
         attn_implementation=args.attn_implementation,
         torch_dtype=torch_dtype,
         device_map="auto",
         quantization_config=quantization_config,
     )
-    model = AutoModelForCausalLM.from_pretrained(args.model_name_or_path, **model_kwargs)
+    model = AutoModelForCausalLM.from_pretrained(
+        args.model_name_or_path, trust_remote_code=args.trust_remote_code, **model_kwargs
+    )
 
     if getattr(model, "hf_device_map", None) is None:
         model = model.to(args.device)
@@ -253,12 +257,11 @@ def parse_eos_tokens(tokenizer, eos_tokens, eos_token_ids):
 
 def chat_cli():
     parser = TrlParser(ChatArguments)
-    args = parser.parse_args_into_dataclasses()[0]
-    if args.config == "default":
-        args.config = os.path.join(os.path.dirname(__file__), "config/default_chat_config.yaml")
-    if args.config.lower() == "none":
-        args.config = None
-    args = parser.update_dataclasses_with_config([args])[0]
+
+    if "--config" not in sys.argv:
+        sys.argv.append("--config")
+        sys.argv.append(os.path.join(os.path.dirname(__file__), "config/default_chat_config.yaml"))
+    args = parser.parse_args_and_config()[0]
     if args.examples is None:
         args.examples = {}
 
@@ -270,7 +273,7 @@ def chat_cli():
         user = args.user
 
     model, tokenizer = load_model_and_tokenizer(args)
-    generation_streamer = TextIteratorStreamer(tokenizer, skip_special_tokens=True)
+    generation_streamer = TextIteratorStreamer(tokenizer, skip_special_tokens=True, skip_prompt=True)
 
     pad_token_id, eos_token_ids = parse_eos_tokens(tokenizer, args.eos_tokens, args.eos_token_ids)
 
@@ -332,10 +335,13 @@ def chat_cli():
 
             chat.append({"role": "user", "content": user_input})
 
+            inputs = tokenizer.apply_chat_template(chat, return_tensors="pt", add_generation_prompt=True).to(
+                model.device
+            )
+            attention_mask = torch.ones_like(inputs)
             generation_kwargs = dict(
-                inputs=tokenizer.apply_chat_template(chat, return_tensors="pt", add_generation_prompt=True).to(
-                    model.device
-                ),
+                inputs=inputs,
+                attention_mask=attention_mask,
                 streamer=generation_streamer,
                 max_new_tokens=current_args.max_new_tokens,
                 do_sample=current_args.do_sample,

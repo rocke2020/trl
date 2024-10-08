@@ -1,113 +1,72 @@
-import multiprocessing
-import sys
-from dataclasses import dataclass, field
+# Copyright 2024 The HuggingFace Inc. team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+from dataclasses import dataclass
 from typing import Optional
 
 from datasets import load_dataset
-from huggingface_hub import HfApi
-from huggingface_hub.repocard import RepoCard
 from transformers import HfArgumentParser
-
-
-"""
-# debug
-python -i examples/datasets/tldr_preference.py --debug --push_to_hub
-# actual push
-python examples/datasets/tldr_preference.py --push_to_hub --hf_entity trl-internal-testing
-"""
-
-
-api = HfApi()
 
 
 @dataclass
 class ScriptArguments:
-    debug: Optional[bool] = field(default=False, metadata={"help": "Enable debug mode"})
-    hf_entity: Optional[str] = field(default=None, metadata={"help": "The Hugging Face entity to use"})
-    hf_repo_id: Optional[str] = field(
-        default="tldr-preference-trl-style", metadata={"help": "The Hugging Face repository ID"}
-    )
-    revision: Optional[str] = field(default="0.1.0", metadata={"help": "The revision of the repository"})
-    update_main_revision: Optional[bool] = field(
-        default=True, metadata={"help": "Update the main revision of the repository"}
-    )
-    push_to_hub: Optional[bool] = field(default=False, metadata={"help": "Push the dataset to the Hugging Face Hub"})
+    r"""
+    Arguments for the script.
+
+    Args:
+        push_to_hub (`bool`, *optional*, defaults to `False`):
+            Whether to push the dataset to the Hugging Face Hub.
+        repo_id (`str`, *optional*, defaults to `"trl-lib/tldr-preference"`):
+            Hugging Face repository ID to push the dataset to.
+        dataset_num_proc (`Optional[int]`, *optional*, defaults to `None`):
+            Number of workers to use for dataset processing.
+    """
+
+    push_to_hub: bool = False
+    repo_id: str = "trl-lib/tldr-preference"
+    dataset_num_proc: Optional[int] = None
+
+
+def to_preference(example):
+    info = example["info"]
+    if example["batch"] in ["batch0_cnndm", "cnndm0", "cnndm2"]:  # CNN Daily Mail batches
+        article = info["article"].replace("\n\n", "\n")
+        prompt = f"TITLE: {info['title']}\n\n{article}\n\nTL;DR:"
+    elif example["batch"] in [f"batch{i}" for i in range(3, 23)] + ["edit_b2_eval_test"]:  # Reddit batches
+        post = info["post"].replace("\n\n", "\n")
+        prompt = f"SUBREDDIT: r/{info['subreddit']}\n\nTITLE: {info['title']}\n\nPOST: {post}\n\nTL;DR:"
+    else:
+        raise ValueError(f"Unknown batch: {example['batch']}")
+
+    chosen_idx = example["choice"]
+    rejected_idx = 1 - chosen_idx
+    chosen = example["summaries"][chosen_idx]["text"]
+    rejected = example["summaries"][rejected_idx]["text"]
+    return {"prompt": prompt, "chosen": chosen, "rejected": rejected}
 
 
 if __name__ == "__main__":
-    args = HfArgumentParser(ScriptArguments).parse_args_into_dataclasses()[0]
-    if args.hf_entity is None:
-        args.hf_entity = api.whoami()["name"]
-    full_repo_id = f"{args.hf_entity}/{args.hf_repo_id}"
+    parser = HfArgumentParser(ScriptArguments)
+    script_args = parser.parse_args_into_dataclasses()[0]
 
-    ds = load_dataset("openai/summarize_from_feedback", "comparisons")
-    if args.debug:
-        for key in ds:
-            ds[key] = ds[key].select(range(50))
-    cnndm_batches = ["batch0_cnndm", "cnndm0", "cnndm2"]
-    if not args.debug:
-        ds["validation_cnndm"] = ds["validation"].filter(lambda x: x["batch"] in cnndm_batches)
-    ds["validation"] = ds["validation"].filter(lambda x: x["batch"] not in cnndm_batches)
+    dataset = load_dataset("openai/summarize_from_feedback", "comparisons")
 
-    tldr_format_str = "SUBREDDIT: r/{subreddit}\n\nTITLE: {title}\n\nPOST: {post}\n\nTL;DR:"
-    cnndm_format_str = "Article:\n{article}\n\nTL;DR:"
-
-    def process(row):
-        format_str = cnndm_format_str if row["batch"] in cnndm_batches else tldr_format_str
-        row["prompt"] = format_str.format(**row["info"])
-        choice = row["choice"]
-        chosen = row["summaries"][choice]["text"]
-        rejected = row["summaries"][1 - choice]["text"]
-        row["chosen"] = [{"role": "user", "content": row["prompt"]}, {"role": "assistant", "content": chosen}]
-        row["rejected"] = [{"role": "user", "content": row["prompt"]}, {"role": "assistant", "content": rejected}]
-        return row
-
-    ds = ds.map(
-        process,
-        num_proc=1 if args.debug else multiprocessing.cpu_count(),
-        load_from_cache_file=False,
+    dataset = dataset.map(
+        to_preference,
+        num_proc=script_args.dataset_num_proc,
+        remove_columns=["info", "summaries", "choice", "worker", "batch", "split", "extra"],
     )
-    for key in ds:  # reorder columns
-        ds[key] = ds[key].select_columns(
-            ["prompt", "chosen", "rejected", "info", "summaries", "choice", "worker", "batch", "split", "extra"]
-        )
-    if args.push_to_hub:
-        revisions = ["main"] if args.update_main_revision else []
-        revisions.append(args.revision)
 
-        # get the commnad used to run the script
-        run_command = " ".join(["python"] + sys.argv)
-
-        for revision in revisions:
-            ds.push_to_hub(full_repo_id, revision=revision)
-            repo_full_url = f"https://huggingface.co/datasets/{full_repo_id}/tree/{revision}"
-
-            # get the name of the current file
-            file_name = __file__.split("/")[-1]
-            api.upload_file(
-                path_or_fileobj=__file__,
-                path_in_repo=file_name,
-                revision=revision,
-                repo_id=full_repo_id,
-                repo_type="dataset",
-            )
-
-        sft_card = RepoCard.load(
-            full_repo_id,
-            repo_type="dataset",
-        )
-        sft_card.text = f"""\
-# TRL's TL;DR Preference Dataset
-
-We preprocess the dataset using our standard `prompt, chosen, rejected` format.
-
-
-## Reproduce this dataset
-
-1. Download the `{file_name}` from the {repo_full_url}.
-2. Run `{run_command}`
-"""
-        sft_card.push_to_hub(
-            full_repo_id,
-            repo_type="dataset",
-        )
+    if script_args.push_to_hub:
+        dataset.push_to_hub(script_args.repo_id)
