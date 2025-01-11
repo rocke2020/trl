@@ -33,7 +33,7 @@ For something slightly more challenging, you can also take a look at the [Good S
 Before you start contributing make sure you have installed all the dev tools:
 
 ```bash
-make dev
+pip install -e .[dev]
 ```
 
 ## Fixing outstanding issues
@@ -152,7 +152,7 @@ Follow these steps to start contributing:
 4. Set up a development environment by running the following command in a conda or a virtual environment you've created for working on this library:
 
    ```bash
-   $ make dev
+   $ pip install -e .[dev]
    ```
 
    (If TRL was already installed in the virtual environment, remove
@@ -180,18 +180,21 @@ Follow these steps to start contributing:
    $ make test
    ```
 
-   TRL relies on `ruff` to format its source code
-   consistently. After you make changes, apply automatic style corrections and code verifications
-   that can't be automated in one go with:
+    TRL relies on `ruff` for maintaining consistent code formatting across its source files. Before submitting any PR, you should apply automatic style corrections and run code verification checks.
 
-   This target is also optimized to only work with files modified by the PR you're working on.
+    We provide a `precommit` target in the `Makefile` that simplifies this process by running all required checks and optimizations on only the files modified by your PR.
 
-   If you prefer to run the checks one after the other, the following command apply the
-   style corrections:
+    To apply these checks and corrections in one step, use:
 
-   ```bash
-   $ make precommit
-   ```
+    ```bash
+    $ make precommit
+    ```
+
+    This command runs the following:
+    - Executes `pre-commit` hooks to automatically fix style issues with `ruff` and other tools.
+    - Runs additional scripts such as adding copyright information.
+
+    If you prefer to apply the style corrections separately or review them individually, the `pre-commit` hook will handle the formatting for the files in question.
 
    Once you're happy with your changes, add changed files using `git add` and
    make a commit with `git commit` to record your changes locally:
@@ -204,7 +207,7 @@ Follow these steps to start contributing:
    Please write [good commit messages](https://chris.beams.io/posts/git-commit/).
 
    It is a good idea to sync your copy of the code with the original
-   Repository regularly. This way you can quickly account for changes:
+   repository regularly. This way you can quickly account for changes:
 
    ```bash
    $ git fetch upstream
@@ -249,7 +252,87 @@ repository here's how to run tests with `pytest` for the library:
 $ python -m pytest -sv ./tests
 ```
 
-That's how `make test` is implemented (sans the `pip install` line)!
+That's how `make test` is implemented (without the `pip install` line)!
 
 You can specify a smaller set of tests to test only the feature
 you're working on.
+
+### Deprecation and Backward Compatibility
+
+Our approach to deprecation and backward compatibility is flexible and based on the feature’s usage and impact. Each deprecation is carefully evaluated, aiming to balance innovation with user needs.
+
+When a feature or component is marked for deprecation, its use will emit a warning message. This warning will include:
+
+- **Transition Guidance**: Instructions on how to migrate to the alternative solution or replacement.
+- **Removal Version**: The target version when the feature will be removed, providing users with a clear timeframe to transition.
+
+Example:
+   
+   ```python
+   warnings.warn(
+       "The `Trainer.foo` method is deprecated and will be removed in version 0.14.0. "
+       "Please use the `Trainer.bar` class instead.",
+       FutureWarning,
+   )
+   ```
+
+The deprecation and removal schedule is based on each feature's usage and impact, with examples at two extremes:
+
+- **Experimental or Low-Use Features**: For a feature that is experimental or has limited usage, backward compatibility may not be maintained between releases. Users should therefore anticipate potential breaking changes from one version to the next.
+
+- **Widely-Used Components**: For a feature with high usage, we aim for a more gradual transition period of approximately **5 months**, generally scheduling deprecation around **5 minor releases** after the initial warning.
+
+These examples represent the two ends of a continuum. The specific timeline for each feature will be determined individually, balancing innovation with user stability needs.
+
+### Working with warnings
+
+Warnings play a critical role in guiding users toward resolving potential issues, but they should be used thoughtfully to avoid unnecessary noise. Unlike logging, which provides informational context or operational details, warnings signal conditions that require attention and action. Overusing warnings can dilute their importance, leading users to ignore them entirely.
+
+#### Definitions
+
+- **Correct**: An operation is correct if it is valid, follows the intended approach, and aligns with the current best practices or guidelines within the codebase. This is the recommended or intended way to perform the operation.
+- **Supported**: An operation is supported if it is technically valid and works within the current codebase, but it may not be the most efficient, optimal, or recommended way to perform the task. This includes deprecated features or legacy approaches that still work but may be phased out in the future.
+
+#### Choosing the right message
+
+- **Correct → No warning**:  
+   If the operation is fully valid and expected, no message should be issued. The system is working as intended, so no warning is necessary.  
+
+- **Correct but deserves attention → No warning, possibly a log message**:
+   When an operation is correct but uncommon or requires special attention, providing an informational message can be helpful. This keeps users informed without implying any issue. If available, use the logger to output this message. Example:  
+
+   ```python
+   logger.info("This is an informational message about a rare but correct operation.")
+   ```
+
+- **Correct but very likely a mistake → Warning with option to disable**:  
+   In rare cases, you may want to issue a warning for a correct operation that’s very likely a mistake. In such cases, you must provide an option to suppress the warning. This can be done with a flag in the function. Example:  
+
+   ```python
+   def my_function(foo, bar, _warn=True):
+       if foo == bar:
+           if _warn:
+               warnings.warn("foo and bar are the same, this is likely a mistake. Ignore this warning by setting `_warn=False`.")
+           # Do something
+   ```
+
+- **Supported but not correct → Warning**:  
+   If the operation is technically supported but is deprecated, suboptimal, or could cause future issues (e.g., conflicting arguments), a warning should be raised. This message should be actionable, meaning it must explain how to resolve the issue. Example:  
+
+   ```python
+   def my_function(foo, bar):
+       if foo and bar:
+           warnings.warn("Both `foo` and `bar` were provided, but only one is allowed. Ignoring `foo`. Please pass only one of these arguments.")
+           # Do something
+   ```
+
+- **Not supported → Exception**:  
+   If the operation is invalid or unsupported, raise an exception. This indicates that the operation cannot be performed and requires immediate attention. Example:  
+
+   ```python
+   def my_function(foo, bar):
+       if foo and bar:
+           raise ValueError("Both `foo` and `bar` were provided, but only one is allowed. Please pass only one of these arguments.")
+   ```
+
+By following this classification, you ensure that warnings, information, and exceptions are used appropriately, providing clear guidance to the user without cluttering the system with unnecessary messages.
