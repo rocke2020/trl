@@ -3,7 +3,8 @@ if [ -z $gpu ]; then
     gpu=2
 fi
 export CUDA_VISIBLE_DEVICES=$gpu
-# 
+export HF_ENDPOINT=https://hf-mirror.com
+#
 file=app/trl/scripts/dpo.py
 nohup python $file \
     --dataset_name trl-lib/ultrafeedback_binarized \
