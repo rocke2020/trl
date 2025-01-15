@@ -22,4 +22,4 @@ nohup python $file \
     --use_peft \
     --lora_r 32 \
     --lora_alpha 16 \
-    > $file-nohup.log 2>&1 &
+    > $file-gpu$gpu-nohup.log 2>&1 &
