@@ -48,10 +48,11 @@ python trl/scripts/dpo.py \
 """
 
 import argparse
-from loguru import logger
 
 import torch
 from datasets import load_dataset
+from loguru import logger
+from peft import PeftModel
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from trl import (
@@ -72,7 +73,9 @@ def main(script_args, training_args, model_args):
     # Model & Tokenizer
     ###################
     torch_dtype = (
-        model_args.torch_dtype if model_args.torch_dtype in ["auto", None] else getattr(torch, model_args.torch_dtype)
+        model_args.torch_dtype
+        if model_args.torch_dtype in ["auto", None]
+        else getattr(torch, model_args.torch_dtype)
     )
     quantization_config = get_quantization_config(model_args)
     model_kwargs = dict(
@@ -84,12 +87,18 @@ def main(script_args, training_args, model_args):
         quantization_config=quantization_config,
     )
     model = AutoModelForCausalLM.from_pretrained(
-        model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code, **model_kwargs
+        model_args.model_name_or_path,
+        trust_remote_code=model_args.trust_remote_code,
+        **model_kwargs,
     )
+    is_peft_model = isinstance(model, PeftModel)
+    logger.info(f"{is_peft_model = } {model_args = }")
     peft_config = get_peft_config(model_args)
     if peft_config is None:
         ref_model = AutoModelForCausalLM.from_pretrained(
-            model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code, **model_kwargs
+            model_args.model_name_or_path,
+            trust_remote_code=model_args.trust_remote_code,
+            **model_kwargs,
         )
     else:
         ref_model = None
@@ -110,7 +119,7 @@ def main(script_args, training_args, model_args):
     # Dataset
     ################
     dataset = load_dataset(script_args.dataset_name, name=script_args.dataset_config)
-    logger.info(f'{training_args.eval_strategy = }')
+    logger.info(f"{training_args = }")
     ##########
     # Training
     ################
@@ -119,7 +128,11 @@ def main(script_args, training_args, model_args):
         ref_model,
         args=training_args,
         train_dataset=dataset[script_args.dataset_train_split],
-        eval_dataset=dataset[script_args.dataset_test_split] if training_args.eval_strategy != "no" else None,
+        eval_dataset=(
+            dataset[script_args.dataset_test_split]
+            if training_args.eval_strategy != "no"
+            else None
+        ),
         processing_class=tokenizer,
         peft_config=peft_config,
     )
@@ -140,7 +153,9 @@ def main(script_args, training_args, model_args):
 def make_parser(subparsers: argparse._SubParsersAction = None):
     dataclass_types = (ScriptArguments, DPOConfig, ModelConfig)
     if subparsers is not None:
-        parser = subparsers.add_parser("dpo", help="Run the DPO training script", dataclass_types=dataclass_types)
+        parser = subparsers.add_parser(
+            "dpo", help="Run the DPO training script", dataclass_types=dataclass_types
+        )
     else:
         parser = TrlParser(dataclass_types)
     return parser

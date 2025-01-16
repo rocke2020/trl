@@ -32,6 +32,7 @@ import transformers
 from accelerate import PartialState
 from accelerate.utils import is_deepspeed_available, tqdm
 from datasets import Dataset, IterableDataset
+from loguru import logger
 from packaging import version
 from torch.utils.data import DataLoader
 from transformers import (
@@ -69,7 +70,6 @@ from .utils import (
     pad_to_length,
     peft_module_casting_to_bf16,
 )
-
 
 if is_peft_available():
     from peft import PeftModel, get_peft_model, prepare_model_for_kbit_training
@@ -495,6 +495,7 @@ class DPOTrainer(Trainer):
                 )
 
         if self.ref_model is None:
+            # The default precompute_ref_log_probs is False
             if not (self.is_peft_model or self.precompute_ref_log_probs):
                 raise ValueError(
                     "No reference model and model is not a Peft model. Try setting `precompute_ref_log_probs=True`"
