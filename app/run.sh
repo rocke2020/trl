@@ -1,10 +1,11 @@
 set -eu
 
-gpu=$1
-export CUDA_VISIBLE_DEVICES=$gpu
+export CUDA_VISIBLE_DEVICES=$1
 export HF_ENDPOINT=https://hf-mirror.com
-#
 file=app/trl/scripts/dpo.py
+echo "CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES" > $file-nohup.log
+
+#
 nohup python $file \
     --dataset_name trl-lib/ultrafeedback_binarized \
     --model_name_or_path /data/model/Qwen/Qwen2.5-0.5B-Instruct \
@@ -22,4 +23,4 @@ nohup python $file \
     --use_peft \
     --lora_r 16 \
     --lora_alpha 8 \
-    > $file-gpu$gpu-nohup.log 2>&1 &
+    >> $file-nohup.log 2>&1 &

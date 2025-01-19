@@ -52,7 +52,7 @@ import argparse
 import torch
 from datasets import load_dataset
 from loguru import logger
-from peft import PeftModel
+from peft.peft_model import PeftModel
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from trl import (
@@ -120,6 +120,7 @@ def main(script_args, training_args, model_args):
     ################
     dataset = load_dataset(script_args.dataset_name, name=script_args.dataset_config)
     logger.info(f"{training_args = }")
+    sample_num = 1000
     ##########
     # Training
     ################
@@ -127,7 +128,7 @@ def main(script_args, training_args, model_args):
         model,
         ref_model,
         args=training_args,
-        train_dataset=dataset[script_args.dataset_train_split],
+        train_dataset=dataset[script_args.dataset_train_split].select(range(sample_num)),
         eval_dataset=(
             dataset[script_args.dataset_test_split]
             if training_args.eval_strategy != "no"
